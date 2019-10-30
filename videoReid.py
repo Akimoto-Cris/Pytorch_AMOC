@@ -20,7 +20,6 @@ from buildModel import *
 from train import train_sequence
 from test import compute_cmc
 
-log.DEBUG
 
 def parser_args():
     parser = argparse.ArgumentParser()
@@ -53,20 +52,22 @@ def isnan(z):
     return z != z
 
 
-def main():
+if __name__ == "__main__":
+    torch.multiprocessing.freeze_support()
+
     opt = parser_args()
     torch.manual_seed(opt.seed)
     torch.cuda.manual_seed_all(opt.seed)
 
     # change these paths to point to the place where you store i-lids or prid datasets
-    dataset_root = "D:\\datasets"
+    dataset_root = "." #"D:\\datasets"
 
     if opt.dataset == 0:
-        seqRootRGB = os.path.join(dataset_root, 'i-LIDS-VID\\sequences')
-        seqRootOF = os.path.join(dataset_root, 'i-LIDS-VID-OF-HVP\\sequences')
+        seqRootRGB = os.path.join(dataset_root, 'i-LIDS-VID', 'sequences')
+        seqRootOF = os.path.join(dataset_root, 'i-LIDS-VID-OF-HVP', 'sequences')
     else:
-        seqRootRGB = os.path.join(dataset_root, 'PRID2011\\multi_shot')
-        seqRootOF = os.path.join(dataset_root, 'PRID2011-OF-HVP\\multi_shot')
+        seqRootRGB = os.path.join(dataset_root, 'PRID2011', 'multi_shot')
+        seqRootOF = os.path.join(dataset_root, 'PRID2011-OF-HVP', 'multi_shot')
 
     log.info('loading Dataset - ',seqRootRGB,seqRootOF)
     reid_set = ReIDDataset(opt.dataset, seqRootRGB, seqRootOF, 'png', opt.sampleSeqLength)
@@ -100,8 +101,3 @@ def main():
     for n in nTestImages:
         log.info('test multiple images ', n)
         compute_cmc(reid_set, reid_set.test_inds, trained_model, n)
-
-
-if __name__ == "__main__":
-    torch.multiprocessing.freeze_support()
-    main()

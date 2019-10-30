@@ -102,10 +102,10 @@ def get_neg_sample(dataset, person_dumi, sample_seqLen, *args):
 
 def normalize(img: np.array) -> np.array:
     for c in range(img.shape[-1]):
-        v = np.sqrt(np.var(img[..., c]))
+        v = np.std(img[..., c])
         m = np.mean(img[..., c])
         img[..., c] -= m
-        img[..., c] /= np.sqrt(v)
+        img[..., c] /= v
     return img
 
 
