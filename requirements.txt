@@ -1,0 +1,7 @@
+# conda install pytorch==1.3.0 ignite -c pytorch
+
+numpy
+argparse
+opencv-python==3.4.3.18
+# visdom
+torchnet
