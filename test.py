@@ -17,15 +17,19 @@ import itertools as it
 
 
 def compute_cmc(dataset: ReIDDataset, cmc_test_inds, net: AMOCNet, sample_seq_length):
-    net = net.cuda()
+    print("Computing CMC metric")
     n_person = len(dataset)
     avgSame = 0
     avgDiff = 0
     avgSameCount = 0
     avgDiffCount = 0
-    simMat = torch.zeros((n_person, n_person)).cuda()
-    cam = np.random.randint(2)
+    simMat = torch.zeros((n_person, n_person))
+    cam = np.random.randint(0,2)
     rng = range(len(cmc_test_inds))
+    if torch.cuda.is_available():
+        net = net.cuda()
+        simMat = simMat.cuda()
+
     with torch.no_grad():
         for shiftx in range(8):
             for doflip in range(2):
@@ -41,8 +45,8 @@ def compute_cmc(dataset: ReIDDataset, cmc_test_inds, net: AMOCNet, sample_seq_le
                     actual_sample_seq_length = min(seqLenA, seqLenB, sample_seq_length)
                     print(actual_sample_seq_length)
                     seq_length = actual_sample_seq_length
-                    seqA = img_and_ofA[:seq_length - 1, :3, ...].squeeze().copy()
-                    seqB = img_and_ofB[:seq_length - 1, :3, ...].squeeze().copy()
+                    seqA = img_and_ofA[:seq_length - 1, :3, ...].copy()
+                    seqB = img_and_ofB[:seq_length - 1, :3, ...].copy()
                     if len(seqA.shape) == 4:
                         seqA = np.expand_dims(seqA, 0)
                     if len(seqB.shape) == 4:

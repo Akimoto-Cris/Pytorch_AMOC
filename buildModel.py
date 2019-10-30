@@ -47,7 +47,7 @@ class AMOCNet(nn.Module):
         self.rnn = MyRNN(input_size=opt.embeddingSize, hidden_size=opt.embeddingSize, dropout=opt.dropoutFrac)
         self.classifier = nn.Sequential(
             nn.Linear(opt.embeddingSize, n_persons_train),
-            nn.Sigmoid()
+            nn.LogSoftmax(dim=1)
         )
         self.distancer = nn.PairwiseDistance(2)
 
@@ -69,7 +69,7 @@ class AMOCNet(nn.Module):
             out_as.append(self.rnn(fc_a))
         out_as = torch.cat(tuple(out_as), 0)
         temp_pool_a = torch.mean(out_as, 0)
-        return torch.unsqueeze(temp_pool_a, 0), torch.unsqueeze(self.classifier(temp_pool_a), 0)
+        return torch.unsqueeze(temp_pool_a, 0), self.classifier(temp_pool_a.unsqueeze(0))
 
     def forward(self, a, b):
         temp_pool_a, output_a = self.forward_single(a)
@@ -112,7 +112,7 @@ class FusionNet(nn.Module):
             nn.Conv2d(n_filter, opt.embeddingSize, filter_size, 1, filter_size // 2),
             nn.Tanh(),
         )
-        nFullyConnected = opt.embeddingSize * 7 * 15
+        nFullyConnected = opt.embeddingSize * 8 * 16
 
         self.fc = nn.Sequential(
             nn.Dropout(opt.dropoutFrac),

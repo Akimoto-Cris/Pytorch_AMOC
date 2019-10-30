@@ -71,6 +71,7 @@ class ReIDDataset(d.Dataset):
 
     def load_sequence_images(self, camera_dir: str, opticalflow_dir: str, files_list: list, *args) -> np.array:
         w, h = 64, 128
+        assert len(files_list) > 1
         images = np.zeros((len(files_list), h, w, 5))
         for i, file in enumerate(files_list):
             filename = os.path.join(camera_dir, file)
@@ -86,8 +87,6 @@ class ReIDDataset(d.Dataset):
 
             images[i, ..., :3] = img
             images[i, ..., 3:] = of[..., :2] * (1 - int(self.disable_opticalflow))
-
-        images = np.transpose(images, [0, 3, 2, 1])
         images = du.data_augment(images, args)
         return images
 
@@ -103,27 +102,20 @@ class ReIDDataset(d.Dataset):
 
         return sorted(person_dirs, key=lambda x: int(re.findall(r"([0-9]+)", x)[0]))
 
-    def get_single(self, ind: int, cam, start, sample_len):
-        img = self.load_sequence_images(*self.dataset[self.inds_set[ind]][cam])[start: start + sample_len, :3, ...].squeeze()
-        of = self.load_sequence_images(*self.dataset[self.inds_set[ind]][cam])[start: start + sample_len, 3:, ...].squeeze()
+    def get_single(self, person: int, cam, start, sample_len):
+        img_of = self.load_sequence_images(*self.dataset[person][cam])
+        img = img_of[start: min(start + sample_len, img_of.shape[0]), :3, ...]
+        of = img_of[start: min(start + sample_len, img_of.shape[0]), 3:, ...]
         return img, of
 
     def __len__(self):
         return len(self.inds_set)
 
     def __getitem__(self, ind: int):
-
-        if ind % 2:
-            startA, startB, actual_sample_seqLen = du.get_pos_sample(
-                self.dataset, self.inds_set[ind], self.sample_seq_length)
-            personA, personB, camA, camB = self.inds_set[ind], self.inds_set[ind], 0, 1
-
-        else:
-            personA, personB, camA, camB, startA, startB, actual_sample_seqLen = du.get_neg_sample(
-                self.dataset, self.inds_set, self.sample_seq_length)
-        inputA, ofA = self.get_single(ind, camA, startA, actual_sample_seqLen)
-        inputB, ofB = self.get_single(ind, camB, startB, actual_sample_seqLen)
-        log.info(F"input shapes: inputA: {inputA.shape}, inputB: {inputB.shape}")
-
-        return inputA, inputB, np.array([1 if ind % 2 else -1]), \
-               du.to_categorical(personA, len(self)), du.to_categorical(personB, len(self)), ind, ofA, ofB
+        get_seq_pair_method = du.get_pos_sample if ind % 2 else du.get_neg_sample
+        personA, personB, camA, camB, startA, startB, actual_sample_seqLen = get_seq_pair_method(
+            self.dataset, self.inds_set[ind], self.sample_seq_length, self.inds_set)
+        inputA, ofA = self.get_single(personA, camA, startA, actual_sample_seqLen)
+        inputB, ofB = self.get_single(personB, camB, startB, actual_sample_seqLen)
+        # print(F"input shapes: inputA: {inputA.shape}, inputB: {inputB.shape}, ind: {ind}")
+        return inputA, inputB, np.array([1 if ind % 2 else -1]), personA, personB, ind, ofA, ofB

@@ -38,7 +38,7 @@ def parser_args():
     parser.add_argument('--disableOpticalFlow', action="store_true", default=False, dest="disableOpticalFlow",
                         help='use optical flow features or not')
     parser.add_argument('--seed', type=int, default=1, help='random seed')
-    parser.add_argument('--learningRate', type=float, default=1e-4)
+    parser.add_argument('--learningRate', type=float, default=1e-3)
     parser.add_argument('--nConvFilters', type=int, default=32)
     parser.add_argument('--embeddingSize', type=int, default=128)
     parser.add_argument('--hingeMargin', type=int, default=2)
@@ -81,8 +81,8 @@ def main():
 
     fullModel = AMOCNet(len(train_loader.dataset), opt)
     contrastive_criterion = nn.HingeEmbeddingLoss(opt.hingeMargin)
-    class_criterion_A = nn.BCELoss()
-    class_criterion_B = nn.BCELoss()
+    class_criterion_A = nn.NLLLoss()
+    class_criterion_B = nn.NLLLoss()
     if torch.cuda.is_available():
         fullModel = fullModel.cuda()
         contrastive_criterion = contrastive_criterion.cuda()

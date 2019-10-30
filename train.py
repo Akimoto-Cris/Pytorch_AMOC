@@ -18,9 +18,11 @@ from test import compute_cmc
 from torchnet.logger import VisdomLogger
 from ModelCheckPointSaveBest import ModelCheckpointSaveBest
 from typing import Iterable
+from buildModel import *
+import cv2
 
 
-def train_sequence(model: torch.nn.Module,
+def train_sequence(model: AMOCNet,
                    contrast_criterion: torch.nn.Module,
                    class_criterion_A: torch.nn.Module,
                    class_criterion_B: torch.nn.Module,
@@ -39,24 +41,21 @@ def train_sequence(model: torch.nn.Module,
     def iterate_func(engine, batch):
         model.train()
         optimizer.zero_grad()
-        inputA, inputB, target, personA, personB, _, _, _ = batch
+        inputA, inputB, target, personA, personB, ind, _, _ = batch
         if len(inputA.shape) == len(inputB.shape) == 4:
             inputA = torch.unsqueeze(inputA, 0)
             inputB = torch.unsqueeze(inputB, 0)
-        target = torch.unsqueeze(target, 0)
-        personA = torch.squeeze(personA, 2)
-        personB = torch.squeeze(personB, 2)
         assert inputA.shape[1] == inputB.shape[1] == opt.sampleSeqLength, \
-            ValueError(f"inputA {inputA.shape}, inputB {inputB.shape}, required seq lenth {opt.sampleSeqLength}")
+            ValueError(f"ind: {ind}, inputA {inputA.shape}, inputB {inputB.shape}, required seq lenth {opt.sampleSeqLength}")
         if torch.cuda.is_available():
-            inputA = inputA.cuda().float()
-            inputB = inputB.cuda().float()
-            target = target.cuda().float()
-            personA = personA.cuda().float()
-            personB = personB.cuda().float()
+            inputA = inputA.float().cuda()
+            inputB = inputB.float().cuda()
+            target = target.float().cuda()
+            personA = personA.long().cuda()
+            personB = personB.long().cuda()
         distance, outputA, outputB = model(inputA, inputB)
-        contrast_loss = contrast_criterion(distance, target)
 
+        contrast_loss = contrast_criterion(distance, target)
         class_loss_A = class_criterion_A(outputA, personA)
         class_loss_B = class_criterion_B(outputB, personB)
         loss = contrast_loss + class_loss_A + class_loss_B
@@ -75,7 +74,8 @@ def train_sequence(model: torch.nn.Module,
     checkpoint_handler = ModelCheckpointSaveBest(opt.checkpoint_path,
                                                  filename_prefix=opt.saveFileName,
                                                  score_function=score_func,
-                                                 require_empty=False)
+                                                 require_empty=False,
+                                                 save_as_state_dict=True)
     stop_handler = EarlyStopping(patience=15, trainer=trainer,
                                  score_function=score_func)
 
@@ -135,3 +135,68 @@ def train_sequence(model: torch.nn.Module,
     trainer.run(train_loader, max_epochs=opt.nEpochs)
 
     return model, trainer_log, val_history
+
+
+# pretrain the MotionNet with Optical Flow vector fields
+def train_motion_net(model: MotionNet,
+                   criterion: torch.nn.L1Loss,
+                   train_loader: torch.utils.data.DataLoader,
+                   test_loader: torch.utils.data.DataLoader,
+                   opt):
+    optimizer = optim.Adam(model.parameters(), lr=opt.learningRate)
+    loss_weight = [0.01, 0.02, 0.08]
+
+    def iterate_func(engine, batch):
+        model.train()
+        inputA, inputB, _, _, _, ind, ofA, ofB = batch
+        if len(inputA.shape) == len(inputB.shape) == 4:
+            inputA.unsqueeze(0)
+            inputB.unsqueeze(0)
+        assert inputA.shape[1] == inputB.shape[1] == opt.sampleSeqLength, \
+            ValueError(f"ind: {ind}, inputA {inputA.shape}, inputB {inputB.shape}, required seq lenth {opt.sampleSeqLength}")
+        if torch.cuda.is_available():
+            inputA = inputA.float().cuda()
+            inputB = inputB.float().cuda()
+
+        def _iterate(input_, of):
+            """
+            single passthrough of training of MotionNet
+            :param input: two consecutive frames concatenated along axis 0: [1, 6, W, H]
+            :param of: target feature map of output of MotionNet: [1, 2, W, H]
+            :return:
+            """
+            optimizer.zero_grad()
+            outs = list(model(input_))
+            loss = None
+            for i, out in enumerate(outs):
+                _, _, w, h = out.shape
+                factor = w // of.shape[2]
+                gt = cv2.resize(of, dsize=None, fx=factor, fy=factor)
+                loss += criterion(out, gt) * loss_weight[i]
+            loss.backward(retain_graph=True)
+            optimizer.step()
+            return loss.item()
+
+        for i in range(inputA.shape[1]):
+            consecutive_frame = torch.cat((inputA[:, i, ...], inputA[:, i + 1, ...]), 1)
+            _iterate(consecutive_frame, ofA)
+
+        for i in range(inputB.shape[1]):
+            consecutive_frame = torch.cat((inputB[:, i, ...], inputB[:, i + 1, ...]), 1)
+            losses = _iterate(consecutive_frame, ofB)
+
+        return losses
+
+    trainer = Engine(iterate_func)
+    train_history = {'loss': []}
+    val_history = {'loss': []}
+    RunningAverage(output_transform=lambda x: x[0]).attach(trainer, 'loss')
+    score_func = lambda engine: - engine.state.metrics['loss']
+    checkpoint_handler = ModelCheckpointSaveBest(opt.checkpoint_path,
+                                                 filename_prefix=opt.saveFileName,
+                                                 score_function=score_func,
+                                                 require_empty=False,
+                                                 save_as_state_dict=True)
+    stop_handler = EarlyStopping(patience=15, trainer=trainer,
+                                 score_function=score_func)
+    pass
