@@ -13,7 +13,7 @@ import torch
 import torch.optim as optim
 from ignite.engine import Engine, Events
 from ignite.metrics import RunningAverage, Loss
-from ignite.handlers import EarlyStopping
+from ignite.handlers import EarlyStopping, ModelCheckpoint
 from test import compute_cmc
 from torchnet.logger import VisdomLogger
 from ModelCheckPointSaveBest import ModelCheckpointSaveBest
@@ -58,7 +58,7 @@ def train_sequence(model: AMOCNet,
         class_loss_A = class_criterion_A(outputA, personA)
         class_loss_B = class_criterion_B(outputB, personB)
         loss = contrast_loss + class_loss_A + class_loss_B
-        loss.backward(retain_graph=True)
+        loss.backward()
         optimizer.step()
         return loss.item(), contrast_loss.item(), class_loss_A.item(), class_loss_B.item()
 
@@ -70,7 +70,7 @@ def train_sequence(model: AMOCNet,
     RunningAverage(output_transform=lambda x: x[2]).attach(trainer, 'ceA')
     RunningAverage(output_transform=lambda x: x[3]).attach(trainer, 'ceB')
     score_func = lambda engine: - engine.state.metrics['ttl']
-    checkpoint_handler = ModelCheckpointSaveBest(opt.checkpoint_path,
+    checkpoint_handler = ModelCheckpoint(opt.checkpoint_path,
                                                  filename_prefix=opt.saveFileName,
                                                  score_function=score_func,
                                                  require_empty=False,
@@ -103,6 +103,7 @@ def train_sequence(model: AMOCNet,
 
     def on_complete(engine, dataloader, mode, history_dict):
         if not engine.state.epoch % opt.samplingEpochs:
+            print("HERE!")
             cmc, simMat, _, avgSame, avgDiff = compute_cmc(
                 dataloader.dataset,
                 dataloader.dataset.inds_set,
@@ -129,7 +130,8 @@ def train_sequence(model: AMOCNet,
     trainer.add_event_handler(Events.EPOCH_COMPLETED, on_complete, train_loader, 'Training', train_history)
     trainer.add_event_handler(Events.EPOCH_COMPLETED, on_complete, test_loader, 'Validation', val_history)
     trainer.add_event_handler(Events.EPOCH_COMPLETED, stop_handler)
-    checkpoint_handler.attach(trainer, model_dict={opt.saveFileName: model})
+    # checkpoint_handler.attach(trainer, model_dict={opt.saveFileName: model})
+    trainer.add_event_handler(Events.EPOCH_COMPLETED, checkpoint_handler, {opt.saveFileName: model})
 
     trainer.run(train_loader, max_epochs=opt.nEpochs)
 

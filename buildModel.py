@@ -23,13 +23,11 @@ class MyRNN(nn.Module):
         self.actdrop = nn.Sequential(nn.Tanh(), nn.Dropout(dropout))
         self.N = nn.Linear(hidden_size, hidden_size, bias=False)
         self.M = nn.Linear(input_size, hidden_size, bias=False)
-        self.hidden = self.init_hidden()
 
     def init_hidden(self):
-        hidden = torch.zeros(1, self.hidden_size)
+        self.hidden = torch.zeros(1, self.hidden_size)
         if torch.cuda.is_available():
-            hidden = hidden.cuda()
-        return hidden
+            self.hidden = self.hidden.cuda()
 
     def forward(self, input_: torch.Tensor) -> torch.Tensor:
         output = self.M(input_) + self.N(self.hidden)
@@ -60,6 +58,7 @@ class AMOCNet(nn.Module):
 
     def forward_single(self, a):
         out_as = []
+        self.rnn.init_hidden()
         for i in range(a.shape[1] - 1):
             img_a = self.img_spat_net(a[:, i, ...])
             consecutive_frame = torch.cat((a[:, i, ...], a[:, i + 1, ...]), 1)

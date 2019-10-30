@@ -60,7 +60,7 @@ if __name__ == "__main__":
     torch.cuda.manual_seed_all(opt.seed)
 
     # change these paths to point to the place where you store i-lids or prid datasets
-    dataset_root = "." #"D:\\datasets"
+    dataset_root = "D:\\datasets"
 
     if opt.dataset == 0:
         seqRootRGB = os.path.join(dataset_root, 'i-LIDS-VID', 'sequences')

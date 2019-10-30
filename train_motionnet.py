@@ -21,6 +21,9 @@ from train import train_motion_net
 from test import compute_cmc
 from videoReid import parser_args
 
+torch.backends.cudnn.enabled = False
+torch.backends.cudnn.benchmark = False
+
 
 def isnan(z):
     return z != z
