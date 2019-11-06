@@ -49,12 +49,14 @@ class AMOCNet(nn.Module):
         )
         self.distancer = nn.PairwiseDistance(2)
 
-        init_weights(self.img_spat_net)
-        init_weights(self.of_spat_net)
-        init_weights(self.fusion)
-        init_weights(self.rnn)
-        init_weights(self.classifier)
+        self.img_spat_net = init_weights(self.img_spat_net)
+        self.of_spat_net = init_weights(self.of_spat_net)
+        self.fusion = init_weights(self.fusion)
+        self.rnn = init_weights(self.rnn)
+        self.classifier = init_weights(self.classifier)
         # print(self)
+        if opt.motionnet_pretrained:
+            self.motion_net.load_motionnet(opt.motionnet_pretrained)
 
     def forward_single(self, a):
         out_as = []
@@ -172,6 +174,20 @@ class MotionNet(nn.Module):
         self.pred3 = nn.Sequential(
             nn.Conv2d(n_filters[0] * 2 + 2, 2, 3, 1, 1), nn.Tanh())
 
+    def load_motionnet(self, path, verbose: bool = True):
+        if verbose:
+            print("loading motion net weights from", path)
+        foreign_state_dict = torch.load(path)
+        target_state_dict = self.state_dict()
+        cnt = 0
+        for key, v in foreign_state_dict.items():
+            matched_key = [k for k in target_state_dict.keys() if k in key]
+            if matched_key:
+                target_state_dict[matched_key[0]] = foreign_state_dict[key]
+                cnt += 0
+        if verbose:
+            print(f"loaded {cnt} layers from {path}")
+
     def forward(self, input_: torch.Tensor):
         assert input_.shape[1] == 6
         x = input_
@@ -201,7 +217,10 @@ def init_weights(model: nn.Module):
             LINEAR_INIT_METHOD(m.weight.data)
             if m.bias is not None:
                 m.bias.data.zero_()
-        if isinstance(m, nn.Conv2d):
+        if isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d):
             CONV_INIT_METHOD(m.weight.data)
             if m.bias is not None:
                 m.bias.data.zero_()
+    return model
+
+

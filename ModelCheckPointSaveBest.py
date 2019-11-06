@@ -38,6 +38,7 @@ class ModelCheckpointSaveBest(ModelCheckpoint):
             super(ModelCheckpointSaveBest, self)._internal_save(obj, path)
 
     def _on_exception(self, engine, exception, to_save):
+        self._iteration = engine.state.iteration
         for name, obj in to_save.items():
             fname = '{}_{}_{}{}.pth'.format(self._fname_prefix, name, self._iteration, "_on_exception")
             path = os.path.join(self._dirname, fname)
@@ -46,6 +47,7 @@ class ModelCheckpointSaveBest(ModelCheckpoint):
             self._save(obj=obj, path=path)
 
     def _on_completed(self, engine, to_save):
+        self._iteration = engine.state.iteration
         for name, obj in to_save.items():
             fname = '{}_{}_{}{}.pth'.format(self._fname_prefix, name, self._iteration, "_on_completed")
             path = os.path.join(self._dirname, fname)

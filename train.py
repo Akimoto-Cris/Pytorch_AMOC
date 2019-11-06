@@ -9,7 +9,7 @@
 @Software: PyCharm
 -----------------
 """
-import torch
+from torch.nn import AvgPool2d
 import torch.optim as optim
 from ignite.engine import Engine, Events
 from ignite.metrics import RunningAverage, Loss
@@ -19,7 +19,7 @@ from torchnet.logger import VisdomLogger
 from ModelCheckPointSaveBest import ModelCheckpointSaveBest
 from typing import Iterable
 from buildModel import *
-import cv2
+import pdb
 
 
 def train_sequence(model: AMOCNet,
@@ -140,24 +140,29 @@ def train_sequence(model: AMOCNet,
 
 # pretrain the MotionNet with Optical Flow vector fields
 def train_motion_net(model: MotionNet,
-                   criterion: torch.nn.L1Loss,
-                   train_loader: torch.utils.data.DataLoader,
-                   test_loader: torch.utils.data.DataLoader,
-                   opt):
+                     criterion: torch.nn.SmoothL1Loss,
+                     train_loader: torch.utils.data.DataLoader,
+                     test_loader: torch.utils.data.DataLoader,
+                     opt):
     optimizer = optim.Adam(model.parameters(), lr=opt.learningRate)
+    model = init_weights(model)
     loss_weight = [0.01, 0.02, 0.08]
+    if opt.pretrained:
+        model = load_dict(model, opt.pretrained)
 
     def iterate_func(engine, batch):
         model.train()
         inputA, inputB, _, _, _, ind, ofA, ofB = batch
         if len(inputA.shape) == len(inputB.shape) == 4:
-            inputA.unsqueeze(0)
-            inputB.unsqueeze(0)
+            inputA = inputA.unsqueeze(0)
+            inputB = inputB.unsqueeze(0)
         assert inputA.shape[1] == inputB.shape[1] == opt.sampleSeqLength, \
             ValueError(f"ind: {ind}, inputA {inputA.shape}, inputB {inputB.shape}, required seq lenth {opt.sampleSeqLength}")
         if torch.cuda.is_available():
             inputA = inputA.float().cuda()
             inputB = inputB.float().cuda()
+            ofA = ofA.float().cuda()
+            ofB = ofB.float().cuda()
 
         def _iterate(input_, of):
             """
@@ -168,24 +173,23 @@ def train_motion_net(model: MotionNet,
             """
             optimizer.zero_grad()
             outs = list(model(input_))
-            loss = None
+            losses = []
             for i, out in enumerate(outs):
-                _, _, w, h = out.shape
-                factor = w // of.shape[2]
-                gt = cv2.resize(of, dsize=None, fx=factor, fy=factor)
-                loss += criterion(out, gt) * loss_weight[i]
-            loss.backward(retain_graph=True)
+                factor = of.shape[2] // out.shape[2]
+                gt = AvgPool2d(factor, factor)(of).detach().data
+                losses += [criterion(out, gt) * loss_weight[i]]
+            loss = sum(losses)
+            loss.backward()
             optimizer.step()
             return loss.item()
 
-        for i in range(inputA.shape[1]):
+        for i in range(inputA.shape[1] - 1):
             consecutive_frame = torch.cat((inputA[:, i, ...], inputA[:, i + 1, ...]), 1)
-            _iterate(consecutive_frame, ofA)
+            _iterate(consecutive_frame, ofA[:, i, ...])
 
-        for i in range(inputB.shape[1]):
+        for i in range(inputB.shape[1] - 1):
             consecutive_frame = torch.cat((inputB[:, i, ...], inputB[:, i + 1, ...]), 1)
-            losses = _iterate(consecutive_frame, ofB)
-
+            losses = _iterate(consecutive_frame, ofB[:, i, ...])
         return losses
 
     def eval_func(engine, batch):
@@ -193,13 +197,15 @@ def train_motion_net(model: MotionNet,
         with torch.no_grad():
             inputA, inputB, _, _, _, ind, ofA, ofB = batch
             if len(inputA.shape) == len(inputB.shape) == 4:
-                inputA.unsqueeze(0)
-                inputB.unsqueeze(0)
+                inputA = inputA.unsqueeze(0)
+                inputB = inputB.unsqueeze(0)
             assert inputA.shape[1] == inputB.shape[1] == opt.sampleSeqLength, \
                 ValueError(f"ind: {ind}, inputA {inputA.shape}, inputB {inputB.shape}, required seq lenth {opt.sampleSeqLength}")
             if torch.cuda.is_available():
                 inputA = inputA.float().cuda()
                 inputB = inputB.float().cuda()
+                ofA = ofA.float().cuda()
+                ofB = ofB.float().cuda()
 
             def _iterate(input_, of):
                 """
@@ -209,30 +215,28 @@ def train_motion_net(model: MotionNet,
                 :return:
                 """
                 outs = list(model(input_))
-                loss = None
+                loss = []
                 for i, out in enumerate(outs):
-                    _, _, w, h = out.shape
-                    factor = w // of.shape[2]
-                    gt = cv2.resize(of, dsize=None, fx=factor, fy=factor)
-                    loss += criterion(out, gt) * loss_weight[i]
-                return loss.item()
+                    factor = of.shape[2] // out.shape[2]
+                    gt = AvgPool2d(factor, factor)(of).detach().data
+                    loss += [criterion(out, gt) * loss_weight[i]]
+                return sum(loss).item()
 
-            for i in range(inputA.shape[1]):
+            for i in range(inputA.shape[1] - 1):
                 consecutive_frame = torch.cat((inputA[:, i, ...], inputA[:, i + 1, ...]), 1)
-                _iterate(consecutive_frame, ofA)
+                _iterate(consecutive_frame, ofA[:, i, ...])
 
-            for i in range(inputB.shape[1]):
+            for i in range(inputB.shape[1] - 1):
                 consecutive_frame = torch.cat((inputB[:, i, ...], inputB[:, i + 1, ...]), 1)
-                losses = _iterate(consecutive_frame, ofB)
-
+                losses = _iterate(consecutive_frame, ofB[:, i, ...])
             return losses
 
     trainer = Engine(iterate_func)
     evaluator = Engine(eval_func)
     train_history = {'loss': []}
     val_history = {'loss': []}
-    RunningAverage(output_transform=lambda x: x[0]).attach(trainer, 'loss')
-    Loss(criterion, output_transform=lambda x: x[0]).attach(evaluator, 'loss')
+    RunningAverage(alpha=1, output_transform=lambda x: x).attach(trainer, 'loss')
+    RunningAverage(alpha=1, output_transform=lambda x: x).attach(evaluator, 'loss')
     score_func = lambda engine: - engine.state.metrics['loss']
     checkpoint_handler = ModelCheckpointSaveBest(opt.checkpoint_path,
                                                  filename_prefix=opt.saveFileName,
@@ -251,7 +255,7 @@ def train_motion_net(model: MotionNet,
     def trainer_log(engine: Engine):
         loss = engine.state.metrics['loss']
         lr = optimizer.param_groups[0]['lr']
-        print(f"Epoch[{engine.state.epoch}] lr={lr:.2e}:\tAvg Loss={loss:.3f}")
+        print(f"Epoch[{engine.state.epoch}] lr={lr:.2e}:\t\tAvg Loss={loss:.4f}")
 
     @trainer.on(Events.ITERATION_COMPLETED)
     def adjust_lr(engine):
@@ -264,7 +268,7 @@ def train_motion_net(model: MotionNet,
     def on_complete(engine, dataloader, mode, history_dict):
         evaluator.run(dataloader)
         loss = evaluator.state.metrics["loss"]
-        print(f"{mode} Result: Epoch[{engine.state.epoch}]- Avg Loss: {loss}")
+        print(f"{mode} Result: Epoch[{engine.state.epoch}]:\tAvg Loss: {loss:.4f}")
 
         if mode == "Validation":
             for key in val_history.keys():
@@ -277,3 +281,14 @@ def train_motion_net(model: MotionNet,
     checkpoint_handler.attach(trainer, model_dict={opt.saveFileName: model})
 
     trainer.run(train_loader, max_epochs=opt.nEpochs)
+
+
+def print_grad(model: MotionNet):
+    print("conv1 gradients ")
+    print(list(model.conv1.modules())[0][0].weight.grad[0][0])
+
+
+def load_dict(model, path):
+    print("loading weights from", path)
+    model.load_state_dict(torch.load(path))
+    return model

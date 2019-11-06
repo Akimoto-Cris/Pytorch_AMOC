@@ -41,7 +41,7 @@ class ReIDDataset(d.Dataset):
         self.dataset = self.load_dataset()
 
         log.info('loading predefined test/training split')
-        self.train_inds, self.test_inds = du.partition_dataset(len(self.dataset), 0.8, t, use_predefined)
+        self.train_inds, self.test_inds = du.partition_dataset(len(self.dataset), 0.98, t, use_predefined)
         self.inds_set = list(self.train_inds) + list(self.test_inds)
 
     def load_dataset(self) -> list:

@@ -105,7 +105,7 @@ def normalize(img: np.array) -> np.array:
         v = np.std(img[..., c])
         m = np.mean(img[..., c])
         img[..., c] -= m
-        img[..., c] /= v
+        img[..., c] /= v + np.finfo(np.float).eps
     return img
 
 

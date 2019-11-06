@@ -12,21 +12,12 @@
 
 import torch
 import os
-import argparse
 from torch.utils.data.sampler import SubsetRandomSampler
 from prepareDataset import ReIDDataset
 import logging as log
 from buildModel import *
 from train import train_motion_net
-from test import compute_cmc
 from videoReid import parser_args
-
-torch.backends.cudnn.enabled = False
-torch.backends.cudnn.benchmark = False
-
-
-def isnan(z):
-    return z != z
 
 
 if __name__ == "__main__":
@@ -47,7 +38,8 @@ if __name__ == "__main__":
         seqRootOF = os.path.join(dataset_root, 'PRID2011-OF-HVP\\multi_shot')
 
     log.info('loading Dataset - ',seqRootRGB,seqRootOF)
-    reid_set = ReIDDataset(opt.dataset, seqRootRGB, seqRootOF, 'png', opt.sampleSeqLength)
+    reid_set = ReIDDataset(opt.dataset, seqRootRGB, seqRootOF, 'png', opt.sampleSeqLength,
+                           use_predefined=opt.usePredefinedSplit)
     log.info('Dataset loaded', len(reid_set))
 
     train_sampler = SubsetRandomSampler(reid_set.train_inds)
@@ -56,12 +48,11 @@ if __name__ == "__main__":
     test_loader = torch.utils.data.DataLoader(reid_set, 1, num_workers=1, sampler=test_sampler)
 
     # build the model
-
-    fullModel = AMOCNet(len(train_loader.dataset), opt)
-    criterion = nn.L1Loss()
+    fullModel = MotionNet([64, 64, 128, 128, 256, 256])
+    criterion = nn.SmoothL1Loss()
     if torch.cuda.is_available():
         fullModel = fullModel.cuda()
         criterion = criterion.cuda()
 
     # -- Training
-    trained_model, trainer_log, val_history = train_motion_net(fullModel, criterion, train_loader, test_loader, opt)
+    train_motion_net(fullModel, criterion, train_loader, test_loader, opt)
