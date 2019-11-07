@@ -10,14 +10,13 @@
 -----------------
 """
 
-import torch
+from options import parser_args
 import os
 from torch.utils.data.sampler import SubsetRandomSampler
 from prepareDataset import ReIDDataset
 import logging as log
 from buildModel import *
 from train import train_motion_net
-from videoReid import parser_args
 
 
 if __name__ == "__main__":

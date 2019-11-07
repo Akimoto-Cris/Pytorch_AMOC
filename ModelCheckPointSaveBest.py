@@ -11,10 +11,12 @@
 """
 from ignite.handlers import ModelCheckpoint
 import os
+import torch
 from ignite.engine import Events
 from typing import Callable
 
 
+# TODO: save epoch
 class ModelCheckpointSaveBest(ModelCheckpoint):
     """"
         Extends class`ignite.handlers.ModelCheckpoint with option to provide a custom save method,
@@ -34,11 +36,13 @@ class ModelCheckpointSaveBest(ModelCheckpoint):
     def _internal_save(self, obj, path):
         if self._save_method is not None:
             self._save_method(obj, path)
+        elif "epoch" in path:
+            torch.save(obj, path)
         else:
             super(ModelCheckpointSaveBest, self)._internal_save(obj, path)
 
     def _on_exception(self, engine, exception, to_save):
-        self._iteration = engine.state.iteration
+        self._iteration = engine.state.engine
         for name, obj in to_save.items():
             fname = '{}_{}_{}{}.pth'.format(self._fname_prefix, name, self._iteration, "_on_exception")
             path = os.path.join(self._dirname, fname)
@@ -47,13 +51,20 @@ class ModelCheckpointSaveBest(ModelCheckpoint):
             self._save(obj=obj, path=path)
 
     def _on_completed(self, engine, to_save):
-        self._iteration = engine.state.iteration
+        self._iteration = engine.state.engine
         for name, obj in to_save.items():
             fname = '{}_{}_{}{}.pth'.format(self._fname_prefix, name, self._iteration, "_on_completed")
             path = os.path.join(self._dirname, fname)
             if os.path.exists(path):
                 os.remove(path)
             self._save(obj=obj, path=path)
+
+    def _on_epoch_end_savee_poch(self, engine):
+        fname = '{}_{}_{}.pth'.format(self._fname_prefix, "epoch", self._iteration)
+        path = os.path.join(self._dirname, fname)
+        if os.path.exists(path):
+            os.remove(path)
+        self._save(obj=engine.state.epoch, path=path)
 
     def attach(self, engine, model_dict):
         """

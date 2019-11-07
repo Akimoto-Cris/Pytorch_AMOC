@@ -35,6 +35,9 @@ def train_sequence(model: AMOCNet,
         'columnnames': list(range(len(train_loader.dataset))),
         'rownames': list(range(len(train_loader.dataset)))
     })
+    if opt.pretrained:
+        model, optimier, epoch = load_dict(model, optimizer, opt.pretrained)
+
     if printInds is None:
         printInds = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
 
@@ -71,10 +74,10 @@ def train_sequence(model: AMOCNet,
     RunningAverage(output_transform=lambda x: x[3]).attach(trainer, 'ceB')
     score_func = lambda engine: - engine.state.metrics['ttl']
     checkpoint_handler = ModelCheckpoint(opt.checkpoint_path,
-                                                 filename_prefix=opt.saveFileName,
-                                                 score_function=score_func,
-                                                 require_empty=False,
-                                                 save_as_state_dict=True)
+                                         filename_prefix=opt.saveFileName,
+                                         score_function=score_func,
+                                         require_empty=False,
+                                         save_as_state_dict=True)
     stop_handler = EarlyStopping(patience=15, trainer=trainer,
                                  score_function=score_func)
 
@@ -82,6 +85,7 @@ def train_sequence(model: AMOCNet,
     def resume_training(engine):
         engine.state.iteration = opt.resume_epoch * len(engine.state.dataloader)
         engine.state.epoch = opt.resume_epoch
+        checkpoint_handler._iteration = opt.resume_epoch
 
     @trainer.on(Events.EPOCH_COMPLETED)
     def trainer_log(engine: Engine):
@@ -131,7 +135,8 @@ def train_sequence(model: AMOCNet,
     trainer.add_event_handler(Events.EPOCH_COMPLETED, on_complete, test_loader, 'Validation', val_history)
     trainer.add_event_handler(Events.EPOCH_COMPLETED, stop_handler)
     # checkpoint_handler.attach(trainer, model_dict={opt.saveFileName: model})
-    trainer.add_event_handler(Events.EPOCH_COMPLETED, checkpoint_handler, {opt.saveFileName: model})
+    trainer.add_event_handler(Events.EPOCH_COMPLETED, checkpoint_handler, {"model": model,
+                                                                           "optimizer": optimizer})
 
     trainer.run(train_loader, max_epochs=opt.nEpochs)
 
@@ -148,7 +153,7 @@ def train_motion_net(model: MotionNet,
     model = init_weights(model)
     loss_weight = [0.01, 0.02, 0.08]
     if opt.pretrained:
-        model = load_dict(model, opt.pretrained)
+        model, optimier, epoch = load_dict(model, optimizer, opt.pretrained)
 
     def iterate_func(engine, batch):
         model.train()
@@ -208,12 +213,6 @@ def train_motion_net(model: MotionNet,
                 ofB = ofB.float().cuda()
 
             def _iterate(input_, of):
-                """
-                single passthrough of training of MotionNet
-                :param input: two consecutive frames concatenated along axis 0: [1, 6, W, H]
-                :param of: target feature map of output of MotionNet: [1, 2, W, H]
-                :return:
-                """
                 outs = list(model(input_))
                 loss = []
                 for i, out in enumerate(outs):
@@ -243,24 +242,25 @@ def train_motion_net(model: MotionNet,
                                                  score_function=score_func,
                                                  require_empty=False,
                                                  save_as_state_dict=True)
-    stop_handler = EarlyStopping(patience=15, trainer=trainer,
-                                 score_function=score_func)
+    stop_handler = EarlyStopping(patience=15, trainer=trainer, score_function=score_func)
 
     @trainer.on(Events.STARTED)
     def resume_training(engine):
-        engine.state.iteration = opt.resume_epoch * len(engine.state.dataloader)
-        engine.state.epoch = opt.resume_epoch
+        engine.state.iteration = epoch * len(engine.state.dataloader)
+        engine.state.epoch = epoch
+        checkpoint_handler._iteration = epoch
 
     @trainer.on(Events.EPOCH_COMPLETED)
     def trainer_log(engine: Engine):
         loss = engine.state.metrics['loss']
         lr = optimizer.param_groups[0]['lr']
-        print(f"Epoch[{engine.state.epoch}] lr={lr:.2e}:\t\tAvg Loss={loss:.4f}")
+        print("-" * 50)
+        print(f"Epoch[{engine.state.epoch}] lr={lr:.2E}:\t\tAvg Loss={loss:.4f}")
 
     @trainer.on(Events.ITERATION_COMPLETED)
     def adjust_lr(engine):
         # learning rate decay
-        if engine.state.iteration % opt.lr_decay == 0 and engine.state.iteration >= 20000:
+        if engine.state.iteration % opt.lr_decay == 0: # and engine.state.iteration >= 20000:
             lr = opt.learningRate * (0.1 ** (engine.state.iteration // opt.lr_decay))
             for param_group in optimizer.param_groups:
                 param_group['lr'] = lr
@@ -268,7 +268,7 @@ def train_motion_net(model: MotionNet,
     def on_complete(engine, dataloader, mode, history_dict):
         evaluator.run(dataloader)
         loss = evaluator.state.metrics["loss"]
-        print(f"{mode} Result: Epoch[{engine.state.epoch}]:\tAvg Loss: {loss:.4f}")
+        print(f"{mode} Result: Epoch[{engine.state.epoch}]:\tAvg Loss={loss:.4f}")
 
         if mode == "Validation":
             for key in val_history.keys():
@@ -278,17 +278,22 @@ def train_motion_net(model: MotionNet,
     trainer.add_event_handler(Events.EPOCH_COMPLETED, on_complete, test_loader, 'Validation', val_history)
 
     trainer.add_event_handler(Events.EPOCH_COMPLETED, stop_handler)
-    checkpoint_handler.attach(trainer, model_dict={opt.saveFileName: model})
+    checkpoint_handler.attach(trainer, model_dict={"model": model,
+                                                   "optimizer": optimizer})
 
     trainer.run(train_loader, max_epochs=opt.nEpochs)
 
 
-def print_grad(model: MotionNet):
-    print("conv1 gradients ")
-    print(list(model.conv1.modules())[0][0].weight.grad[0][0])
-
-
-def load_dict(model, path):
+def load_dict(model: nn.Module, optimizer: nn.Module, path: str):
     print("loading weights from", path)
     model.load_state_dict(torch.load(path))
-    return model
+    try:
+        opt_path = path.replace("_model_", "_optimizer_")
+        epoch_path = path.replace("_model_", "_epoch_")
+        optimizer.load_state_dict(torch.load(opt_path))
+        epoch = int(torch.load(epoch_path))
+    except Exception as e:
+        print(e)
+        epoch = 79
+    return model, optimizer, epoch
+

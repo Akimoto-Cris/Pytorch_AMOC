@@ -56,7 +56,7 @@ class AMOCNet(nn.Module):
         self.classifier = init_weights(self.classifier)
         # print(self)
         if opt.motionnet_pretrained:
-            self.motion_net.load_motionnet(opt.motionnet_pretrained)
+            self.motion_net.load_weight(opt.motionnet_pretrained)
 
     def forward_single(self, a):
         out_as = []
@@ -174,7 +174,7 @@ class MotionNet(nn.Module):
         self.pred3 = nn.Sequential(
             nn.Conv2d(n_filters[0] * 2 + 2, 2, 3, 1, 1), nn.Tanh())
 
-    def load_motionnet(self, path, verbose: bool = True):
+    def load_weight(self, path, verbose: bool = True):
         if verbose:
             print("loading motion net weights from", path)
         foreign_state_dict = torch.load(path)
