@@ -14,6 +14,7 @@ import torch.nn as nn
 
 CONV_INIT_METHOD = nn.init.xavier_normal_
 LINEAR_INIT_METHOD = nn.init.normal_
+RNN_LINEAR_INIT_METHOD = nn.init.orthogonal_
 
 
 class MyRNN(nn.Module):
@@ -23,11 +24,13 @@ class MyRNN(nn.Module):
         self.actdrop = nn.Sequential(nn.Tanh(), nn.Dropout(dropout))
         self.N = nn.Linear(hidden_size, hidden_size, bias=False)
         self.M = nn.Linear(input_size, hidden_size, bias=False)
+        self.hidden = None
 
     def init_hidden(self):
-        self.hidden = torch.zeros(1, self.hidden_size)
         if torch.cuda.is_available():
-            self.hidden = self.hidden.cuda()
+            self.hidden = torch.zeros(1, self.hidden_size).cuda()
+        else:
+            self.hidden = torch.zeros(1, self.hidden_size)
 
     def forward(self, input_: torch.Tensor) -> torch.Tensor:
         output = self.M(input_) + self.N(self.hidden)
@@ -43,10 +46,7 @@ class AMOCNet(nn.Module):
         self.fusion = FusionNet(5, opt.nConvFilters * 2, opt)
         self.motion_net = MotionNet([64, 64, 128, 128, 256, 256])
         self.rnn = MyRNN(input_size=opt.embeddingSize, hidden_size=opt.embeddingSize, dropout=opt.dropoutFrac)
-        self.classifier = nn.Sequential(
-            nn.Linear(opt.embeddingSize, n_persons_train),
-            nn.LogSoftmax(dim=1)
-        )
+        self.classifier = nn.Linear(opt.embeddingSize, n_persons_train)
         self.distancer = nn.PairwiseDistance(2)
 
         self.img_spat_net = init_weights(self.img_spat_net)
@@ -54,9 +54,6 @@ class AMOCNet(nn.Module):
         self.fusion = init_weights(self.fusion)
         self.rnn = init_weights(self.rnn)
         self.classifier = init_weights(self.classifier)
-        # print(self)
-        if opt.motionnet_pretrained:
-            self.motion_net.load_weight(opt.motionnet_pretrained)
 
     def forward_single(self, a):
         out_as = []
@@ -69,12 +66,13 @@ class AMOCNet(nn.Module):
             fc_a = self.fusion(img_a, pf_a)
             out_as.append(self.rnn(fc_a))
         out_as = torch.cat(tuple(out_as), 0)
-        temp_pool_a = torch.mean(out_as, 0)
-        return torch.unsqueeze(temp_pool_a, 0), self.classifier(temp_pool_a.unsqueeze(0))
+        temp_pool_a = torch.mean(out_as, 0, keepdim=True)
+        return temp_pool_a, self.classifier(temp_pool_a)
 
     def forward(self, a, b):
         temp_pool_a, output_a = self.forward_single(a)
         temp_pool_b, output_b = self.forward_single(b)
+        # output_a.register_hook(lambda g: print(g))
         distance = self.distancer(temp_pool_a, temp_pool_b)
         return distance, output_a, output_b
 
@@ -111,7 +109,7 @@ class FusionNet(nn.Module):
 
         self.cnn = nn.Sequential(
             nn.Conv2d(n_filter, opt.embeddingSize, filter_size, 1, filter_size // 2),
-            nn.Tanh(),
+            nn.Tanh()
         )
         nFullyConnected = opt.embeddingSize * 8 * 16
 
@@ -174,20 +172,6 @@ class MotionNet(nn.Module):
         self.pred3 = nn.Sequential(
             nn.Conv2d(n_filters[0] * 2 + 2, 2, 3, 1, 1), nn.Tanh())
 
-    def load_weight(self, path, verbose: bool = True):
-        if verbose:
-            print("loading motion net weights from", path)
-        foreign_state_dict = torch.load(path)
-        target_state_dict = self.state_dict()
-        cnt = 0
-        for key, v in foreign_state_dict.items():
-            matched_key = [k for k in target_state_dict.keys() if k in key]
-            if matched_key:
-                target_state_dict[matched_key[0]] = foreign_state_dict[key]
-                cnt += 0
-        if verbose:
-            print(f"loaded {cnt} layers from {path}")
-
     def forward(self, input_: torch.Tensor):
         assert input_.shape[1] == 6
         x = input_
@@ -211,10 +195,37 @@ class MotionNet(nn.Module):
         return pred_1, pred_2, pred_3       # let intermediate byproducts available for pretraining
 
 
+class ContrastiveLoss(torch.nn.Module):
+    """
+    Contrastive loss function.
+    reference code: https://github.com/delijati/pytorch-siamese/blob/master/contrastive.py
+    """
+
+    def __init__(self, margin=1.0):
+        super(ContrastiveLoss, self).__init__()
+        self.margin = margin
+
+    def check_type_forward(self, in_types):
+        assert len(in_types) == 2
+        _, y_type = in_types
+        assert y_type.dim() == 1, ValueError(y_type.shape)
+
+    def forward(self, dist, y):
+        self.check_type_forward((dist, y))
+
+        dist_sq = torch.pow(dist, 2)
+
+        mdist = self.margin - dist_sq
+        dist = torch.clamp(mdist, min=0.0)
+        loss = y * dist_sq + (1 - y) * dist
+        return loss
+
+
 def init_weights(model: nn.Module):
+    linear_init_weight = LINEAR_INIT_METHOD if not isinstance(model, MyRNN) else RNN_LINEAR_INIT_METHOD
     for m in model.modules():
         if isinstance(m, nn.Linear):
-            LINEAR_INIT_METHOD(m.weight.data)
+            linear_init_weight(m.weight.data)
             if m.bias is not None:
                 m.bias.data.zero_()
         if isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d):

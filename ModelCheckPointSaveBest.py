@@ -16,7 +16,6 @@ from ignite.engine import Events
 from typing import Callable
 
 
-# TODO: save epoch
 class ModelCheckpointSaveBest(ModelCheckpoint):
     """"
         Extends class`ignite.handlers.ModelCheckpoint with option to provide a custom save method,
@@ -36,7 +35,7 @@ class ModelCheckpointSaveBest(ModelCheckpoint):
     def _internal_save(self, obj, path):
         if self._save_method is not None:
             self._save_method(obj, path)
-        elif "epoch" in path:
+        elif not hasattr(obj, "state_dict"):
             torch.save(obj, path)
         else:
             super(ModelCheckpointSaveBest, self)._internal_save(obj, path)
@@ -59,7 +58,7 @@ class ModelCheckpointSaveBest(ModelCheckpoint):
                 os.remove(path)
             self._save(obj=obj, path=path)
 
-    def _on_epoch_end_savee_poch(self, engine):
+    def _on_epoch_end_save_poch(self, engine):
         fname = '{}_{}_{}.pth'.format(self._fname_prefix, "epoch", self._iteration)
         path = os.path.join(self._dirname, fname)
         if os.path.exists(path):
@@ -75,6 +74,7 @@ class ModelCheckpointSaveBest(ModelCheckpoint):
             model_dict (dict): A dict mapping names to objects, e.g. {'mymodel': model}
         """
         engine.add_event_handler(Events.EPOCH_COMPLETED, self, model_dict)
+        engine.add_event_handler(Events.EPOCH_COMPLETED, self._on_epoch_end_save_poch)
         if self._save_on_completed:
             engine.add_event_handler(Events.COMPLETED, self._on_completed, model_dict)
         if self._save_on_exception:

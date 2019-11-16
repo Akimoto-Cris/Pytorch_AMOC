@@ -14,60 +14,68 @@ import torch
 from prepareDataset import ReIDDataset
 from buildModel import AMOCNet
 import itertools as it
+from tqdm import tqdm
 
 
 def compute_cmc(dataset: ReIDDataset, cmc_test_inds, net: AMOCNet, sample_seq_length):
-    print("Computing CMC metric")
-    n_person = len(dataset)
+    n_person = len(cmc_test_inds)
     avgSame = 0
     avgDiff = 0
     avgSameCount = 0
     avgDiffCount = 0
     simMat = torch.zeros((n_person, n_person))
-    cam = np.random.randint(0,2)
-    rng = range(len(cmc_test_inds))
+    rng = range(n_person)
     if torch.cuda.is_available():
         net = net.cuda()
         simMat = simMat.cuda()
 
-    with torch.no_grad():
-        for shiftx in range(8):
-            for doflip in range(2):
-                shifty = shiftx
-                for i, j in list(it.permutations(rng, 2)) + list(zip(rng, rng)):
-                    indA, indB = cmc_test_inds[i], cmc_test_inds[j]
-                    img_and_ofA = dataset.load_sequence_images(
-                        *dataset.dataset[dataset.inds_set[indA]][cam] + (shiftx, shifty, doflip))
-                    img_and_ofB = dataset.load_sequence_images(
-                        *dataset.dataset[dataset.inds_set[indB]][cam] + (shiftx, shifty, doflip))
-                    seqLenA = img_and_ofA.shape[0]
-                    seqLenB = img_and_ofB.shape[0]
-                    actual_sample_seq_length = min(seqLenA, seqLenB, sample_seq_length)
-                    print(actual_sample_seq_length)
-                    seq_length = actual_sample_seq_length
-                    seqA = img_and_ofA[:seq_length - 1, :3, ...].copy()
-                    seqB = img_and_ofB[:seq_length - 1, :3, ...].copy()
-                    if len(seqA.shape) == 4:
-                        seqA = np.expand_dims(seqA, 0)
-                    if len(seqB.shape) == 4:
-                        seqB = np.expand_dims(seqB, 0)
+    shiftx_range = 1
+    doflip_range = 1
 
-                    dist, _, _ = net(seqA, seqB).double()
-                    assert len(dist.shape) == 3
-                    simMat[i][j] += dist.data.double()
-                    if i == j:
-                        avgSame += dist.data.double()
-                        avgSameCount += 1
-                    else:
-                        avgDiff + dist.data.double()
-                        avgDiffCount += 1
+    with torch.no_grad():
+        with tqdm(total=shiftx_range * doflip_range * n_person ** 2) as t:
+            t.set_description("Computing CMC metric")
+            for shiftx in range(shiftx_range):
+                for doflip in range(doflip_range):
+                    shifty = shiftx
+                    for i, j in list(it.permutations(rng, 2)) + list(zip(rng, rng)):
+                        indA, indB = cmc_test_inds[i], cmc_test_inds[j]
+                        img_and_ofA = dataset.load_sequence_images(
+                            *dataset.dataset[indA][0] + (shiftx, shifty, doflip))
+                        img_and_ofB = dataset.load_sequence_images(
+                            *dataset.dataset[indB][1] + (shiftx, shifty, doflip))
+                        seqLenA = img_and_ofA.shape[0]
+                        seqLenB = img_and_ofB.shape[0]
+                        actual_sample_seq_lengthA = min(seqLenA, sample_seq_length)
+                        actual_sample_seq_lengthB = min(seqLenB, sample_seq_length)
+                        seqA = img_and_ofA[:actual_sample_seq_lengthA, :3, ...].copy()
+                        seqB = img_and_ofB[:actual_sample_seq_lengthB, :3, ...].copy()
+                        if len(seqA.shape) == 4:
+                            seqA = np.expand_dims(seqA, 0)
+                        if len(seqB.shape) == 4:
+                            seqB = np.expand_dims(seqB, 0)
+
+                        seqA = torch.Tensor(seqA).cuda()
+                        seqB = torch.Tensor(seqB).cuda()
+                        dist, outA, outB = net(seqA, seqB)
+                        assert len(dist.shape) == 1, ValueError("Wrong output shape of distance:", dist.shape)
+                        # print(f"gt: {cmc_test_inds[i]} - {cmc_test_inds[j]}, dist: {dist[0].data}")
+                        dist = dist.squeeze()
+                        simMat[i][j] += dist.data
+                        if i == j:
+                            avgSame += dist.data
+                            avgSameCount += 1
+                        else:
+                            avgDiff += dist.data
+                            avgDiffCount += 1
+                        t.update(1)
 
         avgSame /= avgSameCount
         avgDiff /= avgDiffCount
 
         cmcInds = torch.DoubleTensor(n_person)
         cmc = torch.zeros(n_person).cuda()
-        samplingOrder = torch.zeros((n_person,n_person)).cuda()
+        samplingOrder = torch.zeros((n_person, n_person)).cuda()
         for i in range(n_person):
             cmcInds[i] = i
             _, o = torch.sort(simMat[i, :])
@@ -76,14 +84,10 @@ def compute_cmc(dataset: ReIDDataset, cmc_test_inds, net: AMOCNet, sample_seq_le
             indx = (o == i).nonzero()
             # build the sampling order for the next epoch
             # we want to sample close images i.e. ones confused with this person
-            samplingOrder[i][:o.shape[0] - 1] = list(filter(lambda x: x != i, o))
+            samplingOrder[i][:o.shape[0] - 1] = torch.Tensor(list(filter(lambda x: x != i, o))).cuda()
             for j in range(indx, n_person):
                 cmc[j] += 1
         cmc = (cmc / n_person) * 100
-        cmcString = ''
-        for c in range(50):
-            if c <= n_person:
-                cmcString = cmcString + ' ' + torch.floor(cmc[c])
-        print(cmcString)
 
     return cmc.data.cpu().numpy(), simMat.data.cpu().numpy(), samplingOrder.data.cpu().numpy(), avgSame, avgDiff
+

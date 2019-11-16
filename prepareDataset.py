@@ -10,7 +10,6 @@
 -----------------
 """
 
-import torch
 import torch.utils.data.dataset as d
 import os
 import re
@@ -27,10 +26,11 @@ class ReIDDataset(d.Dataset):
                  file_ext: str,
                  sample_seq_length: int,
                  disable_opticalflow: bool = False,
-                 use_predefined: bool = True):
+                 use_predefined: bool = True,
+                 split_ratio=0.5):
         super(ReIDDataset, self).__init__()
 
-        assert t in [0, 1], ValueError
+        assert t in [0, 1], FileNotFoundError
         self.dataset_name = du.DATASET_NAMES[t]
         self.seqRootRGB = seq_root_rgb
         self.seqRootOF = seq_root_of
@@ -41,8 +41,11 @@ class ReIDDataset(d.Dataset):
         self.dataset = self.load_dataset()
 
         log.info('loading predefined test/training split')
-        self.train_inds, self.test_inds = du.partition_dataset(len(self.dataset), 0.98, t, use_predefined)
-        self.inds_set = list(self.train_inds) + list(self.test_inds)
+        self.train_inds, self.test_inds = du.partition_dataset(len(self.dataset), split_ratio, t, use_predefined)
+        self.inds_set = self.train_inds
+
+        self.query_set = [cams[0] for i, cams in enumerate(self.dataset) if i in self.test_inds]
+        self.gallery_set = [cams[1] for i, cams in enumerate(self.dataset) if i in self.test_inds]
 
     def load_dataset(self) -> list:
         persons = []
@@ -103,9 +106,11 @@ class ReIDDataset(d.Dataset):
         return sorted(person_dirs, key=lambda x: int(re.findall(r"([0-9]+)", x)[0]))
 
     def get_single(self, person: int, cam, start, sample_len):
-        img_of = self.load_sequence_images(*self.dataset[person][cam])
-        img = img_of[start: min(start + sample_len, img_of.shape[0]), :3, ...]
-        of = img_of[start: min(start + sample_len, img_of.shape[0]), 3:, ...]
+        img_of = self.load_sequence_images(*self.dataset[self.inds_set[person]][cam])
+        seqLen = img_of.shape[0]
+        actual_sample_seq_lengthA = min(seqLen, sample_len)
+        img = img_of[start: min(start + actual_sample_seq_lengthA, img_of.shape[0]), :3, ...]
+        of = img_of[start: min(start + actual_sample_seq_lengthA, img_of.shape[0]), 3:, ...]
         return img, of
 
     def __len__(self):
@@ -114,8 +119,8 @@ class ReIDDataset(d.Dataset):
     def __getitem__(self, ind: int):
         get_seq_pair_method = du.get_pos_sample if ind % 2 else du.get_neg_sample
         personA, personB, camA, camB, startA, startB, actual_sample_seqLen = get_seq_pair_method(
-            self.dataset, self.inds_set[ind], self.sample_seq_length, self.inds_set)
+            self.dataset, ind, self.sample_seq_length, self.inds_set)
         inputA, ofA = self.get_single(personA, camA, startA, actual_sample_seqLen)
         inputB, ofB = self.get_single(personB, camB, startB, actual_sample_seqLen)
         # print(F"input shapes: inputA: {inputA.shape}, inputB: {inputB.shape}, ind: {ind}")
-        return inputA, inputB, np.array([1 if ind % 2 else -1]), personA, personB, ind, ofA, ofB
+        return inputA, inputB, 1 if ind % 2 else 0, personA, personB, ind, ofA, ofB

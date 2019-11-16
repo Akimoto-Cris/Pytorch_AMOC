@@ -51,7 +51,7 @@ for person = 1:319
             end
 
             %optical = opticalFlow('Method','Lucas-Kanade','OutputValue', 'Horizontal and vertical components in complex form');
-            optical = opticalFlowLK();
+            optical = opticalFlowLK;
             
             for f = 1:length(seqFiles)
                 seqImg = imread(fullfile(dataDir,seqFiles{f}));

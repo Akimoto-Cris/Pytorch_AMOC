@@ -4,3 +4,5 @@ numpy
 argparse
 opencv-python==3.4.3.18
 torchnet
+scikit-image
+cvlib
