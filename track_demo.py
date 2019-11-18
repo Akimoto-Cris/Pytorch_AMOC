@@ -41,8 +41,8 @@ class Detection:
         self.sequence = []
         self.color = None
         self.sequence_tensor = None
-        self.max_lenth: int = 128
-        self.seq_len: int = 16
+        self.max_lenth: int = 4
+        self.seq_len: int = 4
         self.id = None
 
     def update(self, frame):
@@ -67,13 +67,13 @@ class Detection:
         else:
             # discard the oldest frame, append new frame to the end
             new = torch.from_numpy(self.sequence[-1]).float()
+            new = new.unsqueeze(0).unsqueeze(0)
             if torch.cuda.is_available():
                 new = new.cuda()
-            if self.sequence_tensor.shape[0] < self.seq_len:
-                new = new.unsqueeze(0).unsqueeze(0)
+            if self.sequence_tensor.shape[1] < self.seq_len:
                 self.sequence_tensor = torch.cat((self.sequence_tensor, new), 1)
             else:
-                self.sequence_tensor = torch.cat((self.sequence_tensor[1:, ...], new), 1)
+                self.sequence_tensor = torch.cat((self.sequence_tensor[:, 1:, ...], new), 1)
         if len(self.sequence_tensor.shape) < 5:
             self.sequence_tensor = self.sequence_tensor.unsqueeze(0).float()
 
@@ -147,7 +147,7 @@ class Identifier:
 
 def draw_bbox(image, bbox, display_class, color):
     cv2.rectangle(image, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 3)
-    cv2.putText(image, display_class, (bbox[0], bbox[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
+    cv2.putText(image, display_class, (bbox[0] + 2, bbox[1] + 25), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
 
 
 def frame_from_list(source, img_size):
@@ -172,6 +172,15 @@ def add_tracker(tracker_type):
     else:
         raise NotImplementedError
     return tracker
+
+
+def box_process(bbox, frame_size):
+    return [
+        int(max(bbox[0], 0)),
+        int(max(bbox[1], 0)),
+        int(min(bbox[2], frame_size[1])),
+        int(min(bbox[3], frame_size[0]))
+    ]
 
 
 def main(source,
@@ -224,14 +233,12 @@ def main(source,
                 person_confs = [confs[i] if label == "person" else 0 for i, label in enumerate(labels)]
                 person_box = bboxes[argmax(person_confs)]
                 tracker = add_tracker(tracker_type)
-                print(person_box)
                 tracker_success = tracker.init(frame, tuple(person_box))
 
                 detection = Detection()
                 detection.color = tuple([np.random.randint(3) * 255 // 2,
                                          np.random.randint(3) * 255 // 2,
                                          np.random.randint(3) * 255 // 2])
-                print(detection.color)
                 detection.update(cv2.resize(frame[person_box[1]: person_box[3], person_box[0]: person_box[2]],
                                             image_size, interpolation=cv2.INTER_CUBIC))
                 if len(identifier):
@@ -252,17 +259,15 @@ def main(source,
             atleast_one = False
             for _id, (tracker, detect) in enumerate(zip(old_tracker.values(), old_detection.values())):
                 # print(len(detect.sequence))
+                # TODO: NMS
                 detected, person_box = tracker.update(frame)
-                person_box = [int(v) for v in person_box]
+                person_box = box_process(person_box, frame.shape)
                 atleast_one = atleast_one or detected
-                color = (255, 255, 255)
-                print(person_box)
                 if detected and 0 <= person_box[1] < person_box[3] and 0 <= person_box[0] < person_box[2]:
                     detect.update(cv2.resize(frame[person_box[1]: person_box[3], person_box[0]: person_box[2]],
                                              image_size, interpolation=cv2.INTER_CUBIC))
-                    color = detect.color
-                    print(color)
-                draw_bbox(frame, person_box, display_class + str(_id), color)
+                    draw_bbox(frame, person_box, display_class + str(_id), detect.color)
+                    break
             tracker_success = atleast_one
 
         if not tracker_success:

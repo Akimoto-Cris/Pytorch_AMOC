@@ -1,5 +1,14 @@
 **/*.pth
 **/*.pkl
+*.svg
+**/*.png
+**/*.csv
+*.caffemodel
+*.prototxt
+
 __pycache__/
 .idea/
 
+*.ipynb
+*.mp4
+**/tmp*
