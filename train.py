@@ -103,9 +103,9 @@ def train_sequence(model: AMOCNet,
         avg_ceA = engine.state.metrics['ceA']
         avg_ceB = engine.state.metrics['ceB']
         lr = optimizer.param_groups[0]['lr']
-        print("-" * 50)
-        print(f"Epoch[{engine.state.epoch}] lr={lr:.2e}:\tTTL={avg_ttl:.3f}\tContrast={avg_cnst:04.3f}\t"
-              f"CrossEntA={avg_ceA:.3f}\tCrossEntB={avg_ceB:.3f}")
+        print(f"Epoch[{engine.state.epoch}]\tlr={lr:.2e}\telapsed:{timer.value():.2f}s:\t"
+              f"TTL={avg_ttl:.3f}\tContrast={avg_cnst:04.3f}\t"
+              f"CrossEntA={avg_ceA:04.3f}\tCrossEntB={avg_ceB:04.3f}")
         train_loss_logger.log(engine.state.epoch, avg_ttl, name="avg_total_loss")
         train_loss_logger.log(engine.state.epoch, avg_cnst, name="avg_contrast")
         train_loss_logger.log(engine.state.epoch, avg_ceA, name="avg_CrossEnt_A")
@@ -115,7 +115,7 @@ def train_sequence(model: AMOCNet,
     def adjust_lr(engine):
         # learning rate decay
         if engine.state.iteration >= 20000:
-            lr = opt.learningRate * (0.1 ** min((engine.state.iteration - 20000) // opt.lr_decay, 5))
+            lr = opt.learningRate * (0.1 ** min((engine.state.iteration - 10000) // opt.lr_decay, 5))
             for param_group in optimizer.param_groups:
                 param_group['lr'] = lr
 

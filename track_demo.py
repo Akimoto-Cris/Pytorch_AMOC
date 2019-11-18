@@ -18,24 +18,39 @@ import os
 import numpy as np
 from buildModel import AMOCNet
 import torch
+import torch.nn as nn
+from options import parser_args
+from train import load_weight
+import time
+
+
+def preprocess(img: np.array) -> np.array:
+    assert img.shape[-1] == 3
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2YUV)
+    img = img.astype(np.float)
+    img = normalize(img)
+    img = np.transpose(img, [2, 1, 0])
+    return img
 
 
 class Detection:
+    """
+    Temporal-Spatial Tensor along detected trajectory of person
+    """
     def __init__(self):
-        self.bbox: list
-        self.id = None
         self.sequence = []
         self.color = None
         self.sequence_tensor = None
         self.max_lenth: int = 128
         self.seq_len: int = 16
+        self.id = None
 
     def update(self, frame):
         if len(self.sequence) == self.max_lenth - 1:
             self.sequence = self.sequence[1:]   # FIFO
-        self.sequence += [frame]
+        self.sequence += [preprocess(frame)]
         self._update_tensor()
-        self._write_disk()
+        # self._write_disk()
 
     def _update_tensor(self):
         """
@@ -46,62 +61,93 @@ class Detection:
         if self.sequence_tensor is None:    # initialize
             pre_stack = [self.sequence[0]] * 2
             stacked = np.stack(pre_stack, axis=0)
-            self.sequence_tensor = torch.Tensor(stacked)
+            self.sequence_tensor = torch.from_numpy(stacked)
             if torch.cuda.is_available():
                 self.sequence_tensor = self.sequence_tensor.cuda()
         else:
             # discard the oldest frame, append new frame to the end
-            new = torch.Tensor(self.sequence[-1]).unsqueeze(0)
+            new = torch.from_numpy(self.sequence[-1]).float()
             if torch.cuda.is_available():
                 new = new.cuda()
             if self.sequence_tensor.shape[0] < self.seq_len:
-                self.sequence_tensor = torch.cat((self.sequence_tensor, new), 0)
+                new = new.unsqueeze(0).unsqueeze(0)
+                self.sequence_tensor = torch.cat((self.sequence_tensor, new), 1)
             else:
-                self.sequence_tensor = torch.cat((self.sequence_tensor[1:, ...], new), 0)
+                self.sequence_tensor = torch.cat((self.sequence_tensor[1:, ...], new), 1)
+        if len(self.sequence_tensor.shape) < 5:
+            self.sequence_tensor = self.sequence_tensor.unsqueeze(0).float()
 
     def _write_disk(self):
+        assert self.id is not None, "Please assign id before calling update method."
         dir_name = f"runtime_detect"
         if not os.path.exists(dir_name):
             os.mkdir(dir_name)
-        person_dir_name = f"person_{self.id}"
-        if not os.path.exists(os.path.join(dir_name, person_dir_name)):
-            os.mkdir(os.path.join(dir_name, person_dir_name))
+        self.person_dir_name = os.path.join(dir_name, f"person_{self.id}")
+        if not os.path.exists(self.person_dir_name):
+            os.mkdir(self.person_dir_name)
         path_name = f"{len(self.sequence) - 1}.png"
-        cv2.imwrite(os.path.join(dir_name, person_dir_name, path_name),
+        cv2.imwrite(os.path.join(self.person_dir_name, path_name),
                     cv2.cvtColor(denormalize(self.sequence[-1]), cv2.COLOR_YUV2BGR))
+
+    def __add__(self, other):
+        self.sequence += other.sequence
+        self.sequence_tensor = torch.cat((self.sequence_tensor, other.sequence_tensor), 0)
+        return self
 
 
 class Identifier:
-    def __init__(self, model: AMOCNet, testset: ReIDDataset, seq_len: int = 128):
+    def __init__(self, model: AMOCNet, seq_len: int = 128, testset: ReIDDataset = None, capacity: int = 120):
         self.model = model
-        self.testset = testset
-        self.gallery_inds = self.testset.test_inds
         self.seq_len = seq_len
+        self.capacity = capacity
+        self.gallery_encodes = {}
+        if testset:
+            self.build_gallery(testset, testset.test_inds)
+        self.distancer = nn.PairwiseDistance(2)
 
-    def request(self, prob: torch.Tensor):
-        if len(prob.shape) == 4:
-            prob = prob.unsqueeze(0)
+    def build_gallery(self, testset, gallery_inds):
+        for _id in gallery_inds:
+            seq, _ = testset.get_single(_id, 1, np.random.randint(8), self.seq_len)
+            gall = torch.Tensor(seq).unsqueeze(0)
+            if torch.cuda.is_available():
+                gall = gall.cuda()
+            if len(self) < self.capacity:
+                self.gallery_encodes[_id] = gall
+
+    def update_gallery(self, detect: Detection):
+        """ (detection: Detection) -> id: int"""
+        _id = len(self)
+        if _id < self.capacity:
+            begin = time.clock()
+            encode, _ = self.model.forward_single(detect.sequence_tensor)
+            print(time.clock() - begin)
+            self.gallery_encodes[_id] = encode
+        return _id
+
+    def __len__(self):
+        return len(self.gallery_encodes)
+
+    def request(self, prob_encode: torch.Tensor):
+        if len(prob_encode.shape) == 1:
+            prob_encode = prob_encode.unsqueeze(0)
+        if torch.cuda.is_available():
+            prob_encode = prob_encode.cuda()
 
         # matching
         min_dist = np.inf
         fetched = 0
-        for id in self.gallery_inds:
-            seq, _ = self.testset.get_single(id, 1, np.random.randint(8), self.seq_len)
-
-            gall = torch.Tensor(seq).unsqueeze(0)
-            if torch.cuda.is_available():
-                gall = gall.cuda()
-            dist, _, _ = self.model(prob, gall)
-            dist = float(dist.squeeze().data.cpu())
+        for i, gall_encode in self.gallery_encodes.items():
+            dist = self.distancer(gall_encode, prob_encode)
+            dist = dist.item()
             if min_dist > dist:
                 min_dist = dist
-                fetched = id
+                fetched = i
         return fetched, min_dist
 
 
-def draw_bbox(image, bbox, class_no, color):
-    cv2.rectangle(image, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 10)
-    cv2.putText(image, "class: " + str(class_no), (bbox[0], bbox[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 5)
+def draw_bbox(image, bbox, display_class, color):
+    cv2.rectangle(image, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 3)
+    cv2.putText(image, display_class, (bbox[0], bbox[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
 
 
 def frame_from_list(source, img_size):
@@ -118,24 +164,32 @@ def argmax(lst):
     return max(range(len(lst)), key=lst.__getitem__)
 
 
-def check_siamese_model(source,
-                        model: AMOCNet,
-                        dataset: ReIDDataset,
-                        image_size,
-                        model_extractor='yolov3-tiny',
-                        sample_sequence_len: int = 128,
-                        memory_size=1,
-                        start=0,
-                        confidence=0.1,
-                        margin=1):
-    counter = 0
-    id_counter = 0
+def add_tracker(tracker_type):
+    if tracker_type == 'KCF':
+        tracker = cv2.TrackerKCF_create()
+    elif tracker_type == 'GOTURN':
+        tracker = cv2.TrackerGOTURN_create()
+    else:
+        raise NotImplementedError
+    return tracker
 
-    identifier = Identifier(model, dataset, sample_sequence_len)
 
-    if os.path.isdir(source):
+def main(source,
+         model: AMOCNet,
+         image_size,
+         model_extractor='yolov3-tiny',
+         sample_sequence_len: int = 128,
+         tracker_type: str = 'KCF',
+         dataset: ReIDDataset = None,
+         confidence=0.1,
+         margin=1, interval: int = 2):
+    old_detection = {}
+    old_tracker = {}
+    identifier = Identifier(model, sample_sequence_len, testset=dataset)
+
+    if isinstance(source, str) and os.path.isdir(source):
         video = frame_from_list(source, image_size)
-    elif os.path.isfile(source):
+    elif os.path.isfile(source) or isinstance(source, int):
         video = cv2.VideoCapture(source)
         if not video.isOpened():
             print("Could not open video")
@@ -146,9 +200,11 @@ def check_siamese_model(source,
     else:
         raise FileNotFoundError("Video file does not exist, exiting")
 
+    tracker_success = False
+    counter = 0
     while True:
         counter += 1
-        if os.path.isfile(source):
+        if isinstance(source, int) or os.path.isfile(source):
             status, frame = video.read()
             if not status:
                 exit()
@@ -158,26 +214,82 @@ def check_siamese_model(source,
             except StopIteration:
                 break
 
-        # skip number of frames
-        if counter < start:
+        display_class = "person"
+
+        # detect human, for now only support single human reid
+        if not tracker_success:
+            bboxes, labels, confs = cv.detect_common_objects(frame, confidence=confidence, model=model_extractor)
+            if len(bboxes):
+                detected = True
+                person_confs = [confs[i] if label == "person" else 0 for i, label in enumerate(labels)]
+                person_box = bboxes[argmax(person_confs)]
+                tracker = add_tracker(tracker_type)
+                print(person_box)
+                tracker_success = tracker.init(frame, tuple(person_box))
+
+                detection = Detection()
+                detection.color = tuple([np.random.randint(3) * 255 // 2,
+                                         np.random.randint(3) * 255 // 2,
+                                         np.random.randint(3) * 255 // 2])
+                print(detection.color)
+                detection.update(cv2.resize(frame[person_box[1]: person_box[3], person_box[0]: person_box[2]],
+                                            image_size, interpolation=cv2.INTER_CUBIC))
+                if len(identifier):
+                    prob_encode, _ = model.forward_single(detection.sequence_tensor)
+                    _id, dist = identifier.request(prob_encode)
+                    old_detection[_id] = detection
+                if not len(identifier) or dist >= margin:
+                    _id = identifier.update_gallery(detection)
+                    if _id in old_detection.keys():
+                        old_detection[_id].update(detection.sequence[-1])
+                    else:
+                        old_detection[_id] = detection
+
+                old_tracker[_id] = tracker
+                draw_bbox(frame, person_box, display_class, detection.color)
+            continue
+        else:
+            atleast_one = False
+            for _id, (tracker, detect) in enumerate(zip(old_tracker.values(), old_detection.values())):
+                # print(len(detect.sequence))
+                detected, person_box = tracker.update(frame)
+                person_box = [int(v) for v in person_box]
+                atleast_one = atleast_one or detected
+                color = (255, 255, 255)
+                print(person_box)
+                if detected and 0 <= person_box[1] < person_box[3] and 0 <= person_box[0] < person_box[2]:
+                    detect.update(cv2.resize(frame[person_box[1]: person_box[3], person_box[0]: person_box[2]],
+                                             image_size, interpolation=cv2.INTER_CUBIC))
+                    color = detect.color
+                    print(color)
+                draw_bbox(frame, person_box, display_class + str(_id), color)
+            tracker_success = atleast_one
+
+        if not tracker_success:
             continue
 
-        bboxes, labels, confs = cv.detect_common_objects(frame, confidence=confidence, model=model_extractor)
-        if len(bboxes):
-            person_confs = [confs[i] if label == "person" else 0 for i, label in enumerate(labels)]
+        # identify the trajectory from the gallery
+        if not counter % interval:
+            for _id, detect in old_detection.items():
+                encode, _ = model.forward_single(detect.sequence_tensor)
+                retrieved, dist = identifier.request(encode)
+                if retrieved != _id and dist < margin:
+                    old_detection[retrieved] = old_detection.pop(_id)
+                    old_tracker[retrieved] = old_tracker.pop(_id)
 
-            detection = Detection()
-            detection.bbox = bboxes[argmax(person_confs)]
-            if detection.bbox[1] == detection.bbox[3] or detection.bbox[2] == detection.bbox[0]:
-                continue
-            detection.color = (255, 0, 255)
-            detection.update(cv2.resize(frame[detection.bbox[1]: detection.bbox[3],
-                                              detection.bbox[0]: detection.bbox[2]],
-                                        image_size, interpolation=cv2.INTER_CUBIC))
-            retrieved, dist = identifier.request(detection.sequence_tensor)
-            if dist < margin:
-                detection.id = retrieved
-            else:
-                detection.id = id_counter
-                id_counter += 1
-                identifier.gallery += [detection.sequence_tensor]
+        cv2.imshow("Person Video Re-Id", frame)
+        if cv2.waitKey(1) & 0xff == 27:
+            break
+
+    video.release()
+    cv2.destroyAllWindows()
+
+
+if __name__ == '__main__':
+    opt = parser_args()
+    model = AMOCNet(150, opt)
+    if opt.pretrained:
+        trained_model = load_weight(model, opt.pretrained, verbose=True)
+    if torch.cuda.is_available():
+        fullModel = model.cuda()
+    main(opt.source, model, (64, 128), model_extractor="yolov3")

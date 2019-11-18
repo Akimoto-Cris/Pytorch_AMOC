@@ -38,5 +38,7 @@ def parser_args():
     parser.add_argument('--pretrained', '-p', type=str)
     parser.add_argument('--data_split', '-ds', type=float, default=0.5)
     parser.add_argument('--train', dest="train", action="store_true")
+    parser.add_argument('--source', dest="source", default=0, help="Camera_id or directory/to/frame_files or path/to/video")
+    parser.add_argument('--tracker', dest="tracker", default='KCF', help="one of KCF and GOTURN")
     options = parser.parse_args()
     return options

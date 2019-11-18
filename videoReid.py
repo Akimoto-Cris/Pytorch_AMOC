@@ -74,7 +74,7 @@ if __name__ == "__main__":
         trained_model = load_weight(fullModel, opt.pretrained, verbose=True)
 
     # -- Evaluation
-    nTestImages = reid_set.test_inds[:30]  # [2 ** (n+1) for n in range(5)]
+    nTestImages = reid_set.test_inds  # [2 ** (n+1) for n in range(5)]
 
     cmc, simMat, _, avgSame, avgDiff = compute_cmc(reid_set, nTestImages, trained_model, 128)
     print(cmc)

@@ -1,0 +1,104 @@
+% Template for ICIP-2019 paper; to be used with:
+%          spconf.sty  - ICASSP/ICIP LaTeX style file, and
+%          IEEEbib.bst - IEEE bibliography style file.
+% --------------------------------------------------------------------------
+\documentclass{article}
+\usepackage{spconf,amsmath,graphicx}
+
+% Example definitions.
+% --------------------
+\def\x{{\mathbf x}}
+\def\L{{\cal L}}
+
+% Title.
+% ------
+\title{Person Re-identification in Crowd Surveillance}
+%
+% Single address.
+% ---------------
+\name{Xu Kaixin}
+\address{Institute of Systems Science, National University of Singapore, Singapore 119615}
+
+\begin{document}
+%\ninept
+%
+\maketitle
+%
+\begin{abstract}
+
+Briefly describe your problem statement and the proposed approach.
+
+\end{abstract}
+%
+\begin{keywords}
+One, two, three, four, five
+\end{keywords}
+%
+\section{Introduction}
+\label{sec:intro}
+
+Person(Pedestrian) Re-Identification is one of the key video analysis technologies involoved in current crowd surveillance scenes, and is the prerequisite of other crowd surveillance tasks such as cross camera person tracking. While to an extent image based person re-identification is exploited by researchers, video based re-identification task receives increasing attentions. Comparing to static images or low frame rate video, continuous video can potentially to preserve more critical information required to recognize visual patterns in public crowded scenaries, such as motion and gait of pedestrian. The goal of video based person re-identification is to re-identify the same person captured by one camera in another camera settings. 
+
+\begin{itemize}
+  \item The main report is provided in *.tex file
+  \item The reference is provided in *.bib file
+  \item The figures are provided as separate jpg/png files
+\end{itemize}
+
+
+\section{Related work}
+
+Discuss published works or online references that relate to your project, such as \cite{adams1995hitchhiker}
+
+\section{Proposed approach}
+\label{sec:proposed approach}
+
+
+\section{Experimental results}
+\label{sec:experimental results}
+
+\begin{equation}\label{equation block model}
+B_{r,c}=\sum\{f(i,j)|(i,j)\in \Omega_{r,c}\}.
+\end{equation}
+\begin{equation}\label{equation 1}
+\sum_{x}=a+b+\hat{c},
+\end{equation}
+
+An inline equation is $a+b=c$. An example of two-column figure is provided in Figure \ref{figure1}, and the single-column figures is provided in Figure \ref{figure2}.
+
+\begin{figure*}[tbh]\includegraphics[width=15cm]{cmc.pdf}
+    \caption{Test figure (two-column).\label{figure1}}
+\end{figure*}
+
+
+
+\begin{figure}[tbh]
+    \centerline{\begin{tabular}{cc|c}
+        \includegraphics[width=3cm]{cmc.pdf}
+        &\includegraphics[width=3cm]{iss.png}& text\\
+    (a) & (b) & (c)
+    \end{tabular}}
+    \caption{Test figure (single column).\label{figure2}}
+\end{figure}
+
+\begin{table}[tbh]
+\caption{The performance comparison.}\label{table1} \centerline{
+    \begin{tabular}{clc|r}
+    \hline\hline
+    Approach & Ref. \cite{adams1995hitchhiker} & Ref. \cite{adams1995hitchhiker} & Proposed approach\\
+    Metric A & $0.8181$ & $0.9171$ & $0.9616$ \\\hline
+    Metric B & $0.8236$ & $0.7654$ & $0.8615$ \\\hline
+    \end{tabular}
+    }
+\end{table}
+
+\section{Conclusions}
+\label{sec:conclusions}
+
+Summarize your key results. What are limitations of your approach? Suggest ideas for future extensions of your ideas.
+
+
+\bibliographystyle{IEEEbib}
+\bibliography{references}
+
+\end{document}
