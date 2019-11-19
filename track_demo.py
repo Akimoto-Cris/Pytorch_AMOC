@@ -41,8 +41,8 @@ class Detection:
         self.sequence = []
         self.color = None
         self.sequence_tensor = None
-        self.max_lenth: int = 4
-        self.seq_len: int = 4
+        self.max_lenth: int = 16
+        self.seq_len: int = 16
         self.id = None
 
     def update(self, frame):
@@ -94,6 +94,14 @@ class Detection:
         self.sequence_tensor = torch.cat((self.sequence_tensor, other.sequence_tensor), 0)
         return self
 
+
+def box_process(bbox, img_shape):
+    return [
+        int(max(bbox[0], 0)),
+        int(max(bbox[1], 0)),
+        int(min(bbox[2], img_shape[1])),
+        int(min(bbox[3], img_shape[0]))
+    ]
 
 class Identifier:
     def __init__(self, model: AMOCNet, seq_len: int = 128, testset: ReIDDataset = None, capacity: int = 120):
@@ -147,7 +155,7 @@ class Identifier:
 
 def draw_bbox(image, bbox, display_class, color):
     cv2.rectangle(image, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 3)
-    cv2.putText(image, display_class, (bbox[0] + 2, bbox[1] + 25), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
+    cv2.putText(image, display_class, (bbox[0] + 4, bbox[1] + 24), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
 
 
 def frame_from_list(source, img_size):
@@ -169,18 +177,11 @@ def add_tracker(tracker_type):
         tracker = cv2.TrackerKCF_create()
     elif tracker_type == 'GOTURN':
         tracker = cv2.TrackerGOTURN_create()
+    elif tracker_type == "CSRT":
+        tracker = cv2.TrackerCSRT_create()
     else:
         raise NotImplementedError
     return tracker
-
-
-def box_process(bbox, frame_size):
-    return [
-        int(max(bbox[0], 0)),
-        int(max(bbox[1], 0)),
-        int(min(bbox[2], frame_size[1])),
-        int(min(bbox[3], frame_size[0]))
-    ]
 
 
 def main(source,
@@ -233,6 +234,7 @@ def main(source,
                 person_confs = [confs[i] if label == "person" else 0 for i, label in enumerate(labels)]
                 person_box = bboxes[argmax(person_confs)]
                 tracker = add_tracker(tracker_type)
+                person_box = box_process(person_box, frame.shape)
                 tracker_success = tracker.init(frame, tuple(person_box))
 
                 detection = Detection()
@@ -259,15 +261,14 @@ def main(source,
             atleast_one = False
             for _id, (tracker, detect) in enumerate(zip(old_tracker.values(), old_detection.values())):
                 # print(len(detect.sequence))
-                # TODO: NMS
                 detected, person_box = tracker.update(frame)
                 person_box = box_process(person_box, frame.shape)
                 atleast_one = atleast_one or detected
                 if detected and 0 <= person_box[1] < person_box[3] and 0 <= person_box[0] < person_box[2]:
                     detect.update(cv2.resize(frame[person_box[1]: person_box[3], person_box[0]: person_box[2]],
                                              image_size, interpolation=cv2.INTER_CUBIC))
-                    draw_bbox(frame, person_box, display_class + str(_id), detect.color)
-                    break
+                    color = detect.color
+                    draw_bbox(frame, person_box, display_class + str(_id), color)
             tracker_success = atleast_one
 
         if not tracker_success:
@@ -280,7 +281,9 @@ def main(source,
                 retrieved, dist = identifier.request(encode)
                 if retrieved != _id and dist < margin:
                     old_detection[retrieved] = old_detection.pop(_id)
+                    old_detection[retrieved].id = retrieved
                     old_tracker[retrieved] = old_tracker.pop(_id)
+                    break
 
         cv2.imshow("Person Video Re-Id", frame)
         if cv2.waitKey(1) & 0xff == 27:
@@ -297,4 +300,4 @@ if __name__ == '__main__':
         trained_model = load_weight(model, opt.pretrained, verbose=True)
     if torch.cuda.is_available():
         fullModel = model.cuda()
-    main(opt.source, model, (64, 128), model_extractor="yolov3")
+    main(opt.source, model, (64, 128), model_extractor="yolov3", margin=1, tracker_type=opt.tracker)
