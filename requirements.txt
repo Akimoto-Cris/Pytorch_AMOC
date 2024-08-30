@@ -2,7 +2,7 @@
 
 numpy
 argparse
-opencv-python==4.2.0.32
+opencv-python==4.8.1.78
 opencv-contrib-python==4.2.0.32
 torchnet
 scikit-image
